@@ -1,0 +1,220 @@
+heat_template_version: 2016-10-14
+description: Create a project
+parameters:
+  public_net_id:
+    type: string
+    description: The ID for the floating ip
+  project_name:
+    type: string
+    description: Name of the project for the flavors
+  project_guid: 
+    type: string
+  api_user:
+    type: string
+    default: ""
+    description: User for API calls (i.e. ipmi)
+  api_pass:
+    type: string
+    default: ""
+    description: Password for API user
+  api_url:
+    type: string
+    default: ""
+    description: OSP URL for API calls
+ 
+resources:
+  openstack_project_infra_key:
+    type: OS::Nova::KeyPair
+    properties:
+      name:
+        str_replace:
+          template: $project$-infra_key
+          params:
+             $project$: { get_param: project_guid }
+      save_private_key: true
+  Network0_network:
+    type: OS::Neutron::Net
+    properties:
+      name: "Network0"
+      shared: false
+      value_specs: {"mtu": 1450}
+  Network1_network:
+    type: OS::Neutron::Net
+    properties:
+      name: "Network1"
+      shared: false
+      value_specs: {"mtu": 1450}
+  Network0_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      name: "sub-Network0"
+      network_id: { get_resource: Network0_network }
+      cidr: "192.168.0.0/24"
+      gateway_ip: ""
+      enable_dhcp: "False"
+      
+      dns_nameservers:
+      
+        - 8.8.8.8
+  Network1_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      name: "sub-Network1"
+      network_id: { get_resource: Network1_network }
+      cidr: "10.0.100.0/24"
+      gateway_ip: "10.0.100.1"
+      enable_dhcp: "False"
+      
+      dns_nameservers:
+      
+        - 8.8.8.8
+  Router0_router:
+    type: OS::Neutron::Router
+    properties:
+      name: "Router0"
+      external_gateway_info: { "network": { get_param: public_net_id } }
+
+  
+  Router0_Network1_port:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_resource: Network1_network }
+      fixed_ips:
+        - ip_address: "10.0.100.1"
+  
+
+
+  
+  Router0_Network1_router_if:
+    type: OS::Neutron::RouterInterface
+    properties:
+        router: { get_resource: Router0_router }
+        port: { get_resource: Router0_Network1_port }
+  
+  instructor.example.com_services_sg:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: instructor.example.com_services_sg
+      rules:
+      
+      - {port_range_max: 22, port_range_min: 22, protocol: tcp, remote_ip_prefix: 0.0.0.0/0}
+      
+      - {port_range_max: 10000, port_range_min: 10000, protocol: tcp, remote_ip_prefix: 0.0.0.0/0}
+      
+      - {port_range_max: 65535, port_range_min: 1, protocol: tcp, remote_ip_prefix: 192.168.0.254/255.255.255.0}
+      
+      - {port_range_max: 65535, port_range_min: 1, protocol: udp, remote_ip_prefix: 192.168.0.254/255.255.255.0}
+      
+      - {port_range_max: 65535, port_range_min: 1, protocol: tcp, remote_ip_prefix: 10.0.100.154/255.255.255.0}
+      
+      - {port_range_max: 65535, port_range_min: 1, protocol: udp, remote_ip_prefix: 10.0.100.154/255.255.255.0}
+      
+  instructor.example.com-0_port:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_resource: Network1_network }
+      mac_address: "2c:c2:60:3a:e9:03"
+      
+      security_groups:
+        - instructor.example.com_services_sg
+      
+      
+      fixed_ips:
+        - {subnet: {get_resource: Network1_subnet}, ip_address: "10.0.100.154"}
+      
+    
+    depends_on:
+      
+      
+      - instructor.example.com_services_sg
+      
+    
+  instructor.example.com-1_port:
+    type: OS::Neutron::Port
+    properties:
+      network: { get_resource: Network0_network }
+      mac_address: "2c:c2:60:59:f1:48"
+      
+      security_groups:
+        - instructor.example.com_services_sg
+      
+      
+      fixed_ips:
+        - {subnet: {get_resource: Network0_subnet}, ip_address: "192.168.0.254"}
+      
+    
+    depends_on:
+      
+      
+      - instructor.example.com_services_sg
+      
+    
+  instructor.example.com_server:
+    type: OS::Nova::Server
+    properties:
+      name: "instructor.example.com"
+      
+      image: "cee-sh-601-v1.0-ARCHIVE-instructor.example.com-vda"
+      
+      config_drive: True
+      #flavor: "CPU_1_Memory_8192_Disk_50"
+      flavor: "quicklab.m1.large"
+
+      
+      key_name:  { get_resource: openstack_project_infra_key }
+      
+      metadata: 
+        "guid": { get_param: project_guid }
+        "description": "Instructor machine"
+        
+        "hostname": 
+          str_replace:
+            template: "instructor"
+            params:
+              REPL: {get_param: project_guid}
+        
+        
+        
+         
+        
+      personality: {"/etc/cloud/cloud.cfg.d/99-custom-networking.cfg": "network: {config: disabled}\n"}
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+          
+            #cloud-config
+            hostname: instructor.example.com
+          
+          params:
+            REPL: {get_param: project_guid}
+            
+      networks:
+        
+        - port: { get_resource: instructor.example.com-0_port}
+        
+        - port: { get_resource: instructor.example.com-1_port}
+        
+      
+    
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: { get_param: public_net_id }
+    depends_on:
+      - instructor.example.com_server
+
+  association:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: floating_ip }
+      port_id: { get_resource: instructor.example.com-0_port }
+
+
+  
+
+outputs:
+  openstack_project_infra_key:
+    description: The SSH infra key
+    value: {get_attr: [openstack_project_infra_key, private_key]}
+
